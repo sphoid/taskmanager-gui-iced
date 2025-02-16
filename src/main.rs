@@ -1,66 +1,97 @@
 use iced::widget::{button, checkbox, column, container, focus_next, row, text, text_input, Row};
-use iced::{Element, Length, Right, Task};
+use iced::{Element, Length, Right, Subscription, Task, time};
+use std::time::Duration;
+use std::vec;
 use uuid::Uuid;
-use taskmanager::project;
-use taskmanager::project::{ProjectData, Project};
+use taskmanager::project::{self, ProjectData, Project};
 
+#[derive(Debug, Clone)]
 enum Context {
 	ProjectList,
 	NewProject,
+	EditProject,
 }
 
+#[derive(Debug, Clone)]
 struct ProjectListState {
 	selected_projects: Vec<Uuid>,
 }
 
+impl ProjectListState {
+	fn new() -> Self {
+		Self {
+			selected_projects: Vec::new(),
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
 struct FormFieldState {
 	is_valid: bool,
 	validation_message: String,
 }
 
+impl FormFieldState {
+	fn new() -> Self {
+		Self {
+			is_valid: true,
+			validation_message: "".to_string(),
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
 struct ProjectFormState {
 	name_field: FormFieldState,
 	description_field: FormFieldState,
 }
 
-struct App {
-	context: Context,
-	projects_data: ProjectData,
+impl ProjectFormState {
+	fn new() -> Self {
+		Self {
+			name_field: FormFieldState::new(),
+			description_field: FormFieldState::new(),
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+struct AppState {
+	context: Option<Context>,
+	projects_data: Option<ProjectData>,
 	current_project: Option<Project>,
-	project_list_state: ProjectListState,
-	project_form_state: ProjectFormState,
+	project_list_state: Option<ProjectListState>,
+	project_form_state: Option<ProjectFormState>,
+}
+
+#[derive(Debug)]
+enum App {
+	Loading,
+	Loaded(AppState),
 }
 
 #[derive(Debug, Clone)]
 enum Message {
+	AppLoaded(Result<AppState, String>),
+	AppSync,
 	NewProject,
-	NewProjectCancel,
-	CurrentProjectAdd,
+	EditProject(Uuid),
+	EditProjectCancel,
+	CurrentProjectSave,
 	CurrentProjectNameChange(String),
 	CurrentProjectDescriptionChange(String),
 	ProjectListProjectSelected { selected: bool, selected_project_id: Uuid },
 	ProjectListSelectAllProjects(bool),
 }
 
-impl Default for App {
+impl Default for AppState {
 	fn default() -> Self {
 		Self {
-			context: Context::ProjectList,
-			projects_data: project::load_data().unwrap(),
+			context: None,
+			projects_data: None,
 			current_project: None,
-			project_list_state: ProjectListState {
-				selected_projects: Vec::new(),
-			},
-			project_form_state: ProjectFormState {
-				name_field: FormFieldState {
-					is_valid: false,
-					validation_message: "".to_string(),
-				},
-				description_field: FormFieldState {
-					is_valid: false,
-					validation_message: "".to_string(),
-				},
-			},
+			project_list_state: None,
+			project_form_state: None,
 		}
 	}
 }
@@ -104,107 +135,129 @@ fn project_form<'a>(project: &'a project::Project, form: &'a ProjectFormState) -
 	.into()
 }
 
-impl App {
-	fn update(&mut self, message: Message) -> Task<Message> {
-		match message {
-			Message::NewProject => {
-				let name = "".to_string();
-				let description = "".to_string();
-				self.current_project = Some(Project::new(&name, &description));
-				self.project_form_state = ProjectFormState {
-					name_field: FormFieldState {
-						is_valid: false,
-						validation_message: "".to_string(),
-					},
-					description_field: FormFieldState {
-						is_valid: false,
-						validation_message: "".to_string(),
-					},
-				};
-				self.context = Context::NewProject;
+impl AppState {
+	async fn load() -> Result<AppState, String> {
+		println!("Loading data");
+		let load_result = project::load_data();
 
-				focus_next()
+		match load_result {
+			Ok(projects_data) => {
+				println!("Data loaded successfully");
+				Ok(Self {
+					context: Some(Context::ProjectList),
+					projects_data: Some(projects_data),
+					current_project: None,
+					project_list_state: Some(ProjectListState::new()),
+					project_form_state: Some(ProjectFormState::new()),
+				})
 			},
-			Message::NewProjectCancel => {
-				self.current_project = None;
-				self.context = Context::ProjectList;
+			Err(error) => {
+				println!("Error occurred while loading data: {}", error);
 
-				Task::none()
-			},
-			Message::CurrentProjectNameChange(name) => {
-				match &mut self.current_project {
-					None => {},
-					Some(project) => {
-						project.name = name;
-
-						let project = self.current_project.as_ref().unwrap();
-						let name_field = &mut self.project_form_state.name_field;
-
-						if project.name.len() == 0 {
-							name_field.is_valid = false;
-							name_field.validation_message = "Name is required".to_string();
-						} else {
-							name_field.is_valid = true;
-							name_field.validation_message = "".to_string();
-						}
-					}
-				}
-
-				Task::none()
-			},
-			Message::CurrentProjectDescriptionChange(description) => {
-				match &mut self.current_project {
-					None => {},
-					Some(project) => {
-						project.description = description;
-					}
-				}
-
-				Task::none()
-			},
-			Message::CurrentProjectAdd => {
-				match &mut self.current_project {
-					None => {},
-					Some(project) => {
-						self.projects_data.create_project(&project.name, &project.description);
-						self.current_project = None;
-						self.context = Context::ProjectList;
-					}
-				}
-
-				Task::none()
-			},
-			Message::ProjectListProjectSelected {selected, selected_project_id} => {
-				if selected {
-					self.project_list_state.selected_projects.push(selected_project_id);
-				} else {
-					self.project_list_state.selected_projects.retain(|project_id| project_id != &selected_project_id);
-				}
-
-				Task::none()
-			},
-			Message::ProjectListSelectAllProjects(selected) => {
-				if selected {
-					self.project_list_state.selected_projects = self.projects_data.get_projects().iter().map(|project| {
-						project.id
-					}).collect();
-				} else {
-					self.project_list_state.selected_projects.clear();
-				}
-
-				Task::none()
+				Ok(Self {
+					..AppState::default()
+				})
 			}
 		}
 	}
 
+	fn save(&self) -> Result<(), String> {
+		println!("Saving data");
+		let save_result = project::write_data(self.projects_data.as_ref().unwrap());
+
+		match save_result {
+			Ok(_) => {
+				println!("Data saved successfully");
+				Ok(())
+			},
+			Err(error) => {
+				println!("Error occurred while saving data: {}", error);
+				Ok(())
+			}
+		}
+	}
+
+	fn view(&self) -> Element<Message> {
+		match &self.context {
+			None => {
+				return text("No context found").into();
+			},
+			Some(context) => {
+				match context {
+					Context::ProjectList => {
+						self.view_project_list()
+					},
+					Context::NewProject => {
+						self.view_edit_project()
+					},
+					Context::EditProject => {
+						self.view_edit_project()
+					}
+				}
+			}
+		}
+	}
+
+	fn get_projects(&self) -> Vec<Project> {
+		match &self.projects_data {
+			None => Vec::new(),
+			Some(projects_data) => projects_data.get_projects(),
+		}
+	}
+
+	fn save_current_project(&mut self) {
+		let current_project = &mut self.current_project;
+		if let Some(current_project) = current_project {
+			let projects_data = &mut self.projects_data;
+			if let Some(projects_data) = projects_data {
+				let context = &mut self.context;
+				if let Some(context) = context {
+					match context {
+						Context::NewProject => {
+							projects_data.create_project(&current_project.name, &current_project.description);
+						},
+						Context::EditProject => {
+							let project: Option<&mut Project> = projects_data.get_project_mut(&current_project.id);
+							if let Some(project) = project {
+								project.name = current_project.name.clone();
+								project.description = current_project.description.clone();
+							}
+						},
+						_ => {},
+					}
+				}
+			}
+		}
+	}
+
+	fn is_project_selected(&self, project_id: &Uuid) -> bool {
+		match &self.project_list_state {
+			None => false,
+			Some(project_list_state) => project_list_state.selected_projects.contains(project_id),
+		}
+	}
+
+	fn get_selected_project_ids(&self) -> Vec<Uuid> {
+		self.get_projects()
+			.iter()
+			.map(|project| {
+				project.id
+			})
+			.filter(|project_id| {
+				self.is_project_selected(project_id)
+			})
+			.collect()
+	}
+
 	fn project_list(&self) -> Element<Message> {
-		let project_list: Vec<Element<Message>> = self.projects_data.get_projects().iter().map(|project| {
-			let is_project_selected = self.project_list_state.selected_projects.contains(&project.id);
+		let projects = &self.get_projects();
+		let project_list: Vec<Element<Message>> = projects.iter().map(|project| {
+			let is_project_selected = self.is_project_selected(&project.id);
 
 			let select_project = {
-				let project = *project;
+				let project_id = project.id;
 				move |selected: bool| {
-					Message::ProjectListProjectSelected { selected, selected_project_id: project.id}
+					Message::ProjectListProjectSelected { selected, selected_project_id: project_id}
 				}
 			};
 
@@ -212,23 +265,25 @@ impl App {
 				.push(checkbox("", is_project_selected).on_toggle(select_project))
 				.push(text(project.name.clone()))
 				.push(text(project.description.clone()))
+				.push(button("Edit").on_press(Message::EditProject(project.id)))
 				.spacing(15)
 				.into()
 		}).collect();
 
-		if project_list.len() == 0 {
+		if projects.is_empty() {
 			return text("You have no projects").into();
 		}
 
-		let all_projects_selected = self.project_list_state.selected_projects.len() == self.projects_data.get_projects().len();
-		let select_all_checkbox = checkbox("Select All", all_projects_selected).on_toggle(Message::ProjectListSelectAllProjects);
+		let all_projects_selected = self.get_selected_project_ids().len() == projects.len();
 
 		container(
 			column![
-				select_all_checkbox,
+				checkbox("Select All", all_projects_selected)
+					.on_toggle(Message::ProjectListSelectAllProjects),
 				column(project_list)
 					.spacing(10)
-			].spacing(10)
+			]
+				.spacing(10)
 		)
 			.width(Length::Fill)
 			.into()
@@ -249,46 +304,206 @@ impl App {
 			.into()
 	}
 
-	fn view_new_project(&self) -> Element<Message> {
+	fn view_edit_project(&self) -> Element<Message> {
 		match &self.current_project {
 			None => {
 				return text("No project found").into();
 			},
 			Some(project) => {
-				container(
-					column![
-						heading("New Project"),
-						project_form(project, &self.project_form_state),
+				match &self.project_form_state {
+					None => {
+						return text("No project form found").into();
+					},
+					Some(project_form_state) => {
 						container(
-							row![
-								button("Save").on_press(Message::CurrentProjectAdd),
-								button("Cancel").on_press(Message::NewProjectCancel),
+							column![
+								heading("New Project"),
+								project_form(project, &project_form_state),
+								container(
+									row![
+										button("Save").on_press(Message::CurrentProjectSave),
+										button("Cancel").on_press(Message::EditProjectCancel),
+									]
+									.spacing(5)
+								)
+								.width(Length::Fill)
+								.align_x(Right)
 							]
-							.spacing(5)
+							.spacing(20)
 						)
-						.width(Length::Fill)
-						.align_x(Right)
-					]
-					.spacing(20)
-				)
-				.padding(20)
-				.into()
+						.padding(20)
+						.into()
+					}
+				}
+			}
+		}
+	}
+
+}
+
+impl App {
+	fn new() -> (Self, Task<Message>) {
+		(
+			Self::Loading,
+			Task::perform(async {
+				AppState::load().await.map_err(|e| e.to_string())
+			}, Message::AppLoaded),
+		)
+	}
+
+	fn update(&mut self, message: Message) -> Task<Message> {
+		match self {
+			App::Loading => {
+				match message {
+					Message::AppLoaded(Ok(state)) => {
+						*self = App::Loaded(AppState {
+							projects_data: state.projects_data,
+							context: Some(Context::ProjectList),
+							..AppState::default()
+						});
+					}
+					Message::AppLoaded(Err(_)) => {
+						*self = App::Loaded(AppState::default());
+					}
+					_ => {}
+				}
+
+				Task::none()
+			},
+			App::Loaded(state) => {
+				match message {
+					Message::AppSync => {
+						state.save().unwrap();
+
+						Task::none()
+					},
+					Message::NewProject => {
+						let name = "".to_string();
+						let description = "".to_string();
+						state.current_project = Some(Project::new(&name, &description));
+						state.project_form_state = Some(ProjectFormState::new());
+						state.context = Some(Context::NewProject);
+
+						focus_next()
+					},
+					Message::EditProject(project_id) => {
+						let projects_data = state.projects_data.as_ref();
+						if let Some(projects_data) = projects_data {
+							state.current_project = projects_data.get_project(&project_id).cloned();
+							state.project_form_state = Some(ProjectFormState::new());
+							state.context = Some(Context::EditProject);
+						}
+
+						Task::none()
+					},
+					Message::EditProjectCancel => {
+						state.current_project = None;
+						state.context = Some(Context::ProjectList);
+
+						Task::none()
+					},
+					Message::CurrentProjectNameChange(name) => {
+						match &mut state.current_project {
+							None => {},
+							Some(project) => {
+								project.name = name;
+
+								let project = state.current_project.as_ref().unwrap();
+
+								match &mut state.project_form_state {
+									None => {},
+									Some(form) => {
+										let name_field = &mut form.name_field;
+
+										if project.name.len() == 0 {
+											name_field.is_valid = false;
+											name_field.validation_message = "Name is required".to_string();
+										} else {
+											name_field.is_valid = true;
+											name_field.validation_message = "".to_string();
+										}
+									}
+								}
+							}
+						}
+
+						Task::none()
+					},
+					Message::CurrentProjectDescriptionChange(description) => {
+						match &mut state.current_project {
+							None => {},
+							Some(project) => {
+								project.description = description;
+							}
+						}
+
+						Task::none()
+					},
+					Message::CurrentProjectSave => {
+						state.save_current_project();
+
+						Task::none()
+					},
+					Message::ProjectListProjectSelected {selected, selected_project_id} => {
+						match &mut state.projects_data {
+							None => {},
+							Some(_) => {
+								match &mut state.project_list_state {
+									None => {},
+									Some(project_list_state) => {
+										if selected {
+											project_list_state.selected_projects.push(selected_project_id);
+										} else {
+											project_list_state.selected_projects.retain(|project_id| project_id != &selected_project_id);
+										}
+									}
+								}
+							}
+						}
+
+						Task::none()
+					},
+					Message::ProjectListSelectAllProjects(selected) => {
+						let project_ids: Vec<Uuid> = if selected {
+							state.get_projects().iter().map(|project| project.id).collect()
+						} else {
+							Vec::new()
+						};
+
+						if let Some(project_list_state) = &mut state.project_list_state {
+							project_list_state.selected_projects = project_ids;
+						}
+
+						Task::none()
+					},
+					_ => Task::none(),
+				}
 			}
 		}
 	}
 
 	fn view(&self) -> Element<Message> {
-		match self.context {
-			Context::ProjectList => {
-				self.view_project_list()
-			}
-			Context::NewProject => {
-				self.view_new_project()
+		match self {
+			App::Loading => {
+				return text("Loading...").into();
+			},
+			App::Loaded(state) => {
+				return state.view();
 			}
 		}
+	}
+
+	fn subscription(&self) -> Subscription<Message> {
+		let tick = time::every(Duration::from_secs(15)).map(|_| {
+			Message::AppSync
+		});
+
+		Subscription::batch(vec![tick])
 	}
 }
 
 pub fn main() -> iced::Result {
-	iced::run("Task Manager GUI", App::update, App::view)
+	iced::application("Task Manager", App::update, App::view)
+		.subscription(App::subscription)
+		.run_with(App::new)
 }

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-taskmanager = { git = "https://github.com/sphoid/libtaskmanager-rust.git" }
-#taskmanager = { path = "../libtaskmanager" }
-iced = "0.13.1"
+#taskmanager = { git = "https://github.com/sphoid/libtaskmanager-rust.git" }
+taskmanager = { path = "../libtaskmanager" }
+iced = { version = "0.13.1", features = ["smol"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
